@@ -57,6 +57,7 @@
 | `-threshold-max` | `83` | 大于该比率时跳过 18:50 重置。|
 | `-threshold-min` | `0`  | 仅在余额低于该比率时执行 18:50 重置。|
 | `-first-reset` | `false` | `true` 时启用 18:50 首次重置。|
+| `SAVE_RESPONSES` | `false` | `true` 时保存 API 响应体到 `data/responses/`。|
 
 ## 常用模式
 

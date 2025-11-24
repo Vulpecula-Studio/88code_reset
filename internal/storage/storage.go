@@ -13,29 +13,31 @@ import (
 )
 
 const (
-	AccountFile          = "account.json"
-	StatusFile           = "status.json"
-	LockFile             = "reset.lock"
-	ResponseLogDir       = "responses"          // API响应体保存目录
-	MultiAccountFile     = "accounts.json"      // 多账号配置文件
-	AccountsDir          = "accounts"           // 多账号数据目录
+	AccountFile      = "account.json"
+	StatusFile       = "status.json"
+	LockFile         = "reset.lock"
+	ResponseLogDir   = "responses"     // API响应体保存目录
+	MultiAccountFile = "accounts.json" // 多账号配置文件
+	AccountsDir      = "accounts"      // 多账号数据目录
 )
 
 // Storage 存储管理器
 type Storage struct {
-	dataDir string
-	mu      sync.RWMutex
+	dataDir       string
+	saveResponses bool
+	mu            sync.RWMutex
 }
 
 // NewStorage 创建新的存储管理器
-func NewStorage(dataDir string) (*Storage, error) {
+func NewStorage(dataDir string, saveResponses bool) (*Storage, error) {
 	// 确保数据目录存在
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("创建数据目录失败: %w", err)
 	}
 
 	return &Storage{
-		dataDir: dataDir,
+		dataDir:       dataDir,
+		saveResponses: saveResponses,
 	}, nil
 }
 
@@ -407,6 +409,12 @@ func (s *Storage) SaveAPIResponse(endpoint, method string, requestBody, response
 		responseLog["response_body"] = ""
 	}
 
+	// 检查是否开启了响应保存
+	if !s.saveResponses {
+		logger.Debug("API响应未保存 (设置 SAVE_RESPONSES=true 开启)")
+		return nil
+	}
+
 	// 保存为格式化的 JSON
 	data, err := json.MarshalIndent(responseLog, "", "  ")
 	if err != nil {
@@ -417,6 +425,6 @@ func (s *Storage) SaveAPIResponse(endpoint, method string, requestBody, response
 		return fmt.Errorf("保存响应日志失败: %w", err)
 	}
 
-	logger.Debug("API响应已保存: %s", filePath)
+	logger.Info("API响应已保存: %s", filePath)
 	return nil
 }

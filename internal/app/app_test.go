@@ -93,7 +93,7 @@ func newTestApp(t *testing.T, cfg appconfig.Settings, mgr accountManager) *App {
 	t.Helper()
 
 	// storage is unused in tests but construct to satisfy default wiring if needed
-	store, err := storage.NewStorage(t.TempDir())
+	store, err := storage.NewStorage(t.TempDir(), false)
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}

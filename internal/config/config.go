@@ -32,6 +32,7 @@ type Settings struct {
 	CreditThresholdMin float64
 	UseMaxThreshold    bool
 	EnableFirstReset   bool
+	SaveResponses      bool
 }
 
 // MaskAPIKey 遮蔽 API Key 显示
@@ -165,6 +166,24 @@ func GetEnableFirstReset(cmdEnable bool) bool {
 
 	// 4. 默认值
 	return DefaultEnableFirstReset
+}
+
+// GetSaveResponses 从多个来源获取是否保存 API 响应
+func GetSaveResponses() bool {
+	// 优先级: 环境变量 > .env 文件 > 默认值 (false)
+
+	// 1. 环境变量 SAVE_RESPONSES
+	if envSave := os.Getenv("SAVE_RESPONSES"); envSave != "" {
+		return parseBool(envSave)
+	}
+
+	// 2. .env 文件
+	if save := readSaveResponsesFromEnv(EnvFile); save {
+		return true
+	}
+
+	// 3. 默认值
+	return false
 }
 
 // GetAllAPIKeys 从多个来源获取全部 API Keys
@@ -389,4 +408,27 @@ func parseFloat(s string) (float64, error) {
 func parseBool(s string) bool {
 	s = strings.TrimSpace(strings.ToLower(s))
 	return s == "true" || s == "1" || s == "yes" || s == "on" || s == "enabled"
+}
+
+func readSaveResponsesFromEnv(filename string) bool {
+	file, err := os.Open(filename)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "SAVE_RESPONSES=") {
+			valueStr := strings.TrimPrefix(line, "SAVE_RESPONSES=")
+			return parseBool(valueStr)
+		}
+	}
+
+	return false
 }

@@ -65,9 +65,10 @@ func main() {
 
 	plans := appconfig.ParsePlans(*planNames)
 	keys := appconfig.GetAllAPIKeys(*apiKey, *apiKeys)
+	saveResponses := appconfig.GetSaveResponses()
 
 	// 初始化依赖
-	store, err := storage.NewStorage(*dataDir)
+	store, err := storage.NewStorage(*dataDir, saveResponses)
 	if err != nil {
 		logger.Error("初始化存储失败: %v", err)
 		os.Exit(1)
@@ -86,6 +87,7 @@ func main() {
 		CreditThresholdMin: thresholdMin,
 		UseMaxThreshold:    useMax,
 		EnableFirstReset:   firstReset,
+		SaveResponses:      saveResponses,
 	}
 
 	application := app.New(cfg, store, accountMgr)
