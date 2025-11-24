@@ -14,6 +14,16 @@ const (
 	DefaultTimezone           = "Asia/Shanghai" // 默认使用北京/上海时区 (UTC+8)
 	DefaultCreditThresholdMax = 83.0            // 默认额度上限百分比 83%（当额度>上限时跳过重置）
 	DefaultEnableFirstReset   = false           // 默认关闭18:55重置
+
+	// 北京时区
+	BeijingTimezone = "Asia/Shanghai"
+
+	// 重置时间配置
+	FirstResetHour   = 18
+	FirstResetMinute = 50
+
+	SecondResetHour   = 23
+	SecondResetMinute = 55
 )
 
 // EnvFile 提供 .env 文件位置（可在测试中重写）

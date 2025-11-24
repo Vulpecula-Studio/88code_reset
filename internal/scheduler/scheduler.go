@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"code88reset/internal/api"
+	"code88reset/internal/config"
 	"code88reset/internal/models"
 	"code88reset/internal/reset"
 	"code88reset/internal/storage"
@@ -12,16 +13,6 @@ import (
 )
 
 const (
-	// 北京时区
-	BeijingTimezone = "Asia/Shanghai"
-
-	// 重置时间配置
-	FirstResetHour   = 18
-	FirstResetMinute = 50
-
-	SecondResetHour   = 23
-	SecondResetMinute = 55
-
 	// 最小间隔时间（5小时）
 	MinResetInterval = 5 * time.Hour
 
@@ -31,16 +22,8 @@ const (
 
 // Scheduler 调度器
 type Scheduler struct {
-	apiClient          *api.Client
-	storage            *storage.Storage
-	location           *time.Location
-	creditThresholdMax float64 // 额度上限百分比（0-100），当额度>上限时跳过重置
-	creditThresholdMin float64 // 额度下限百分比（0-100），当额度<下限时才执行重置
-	useMaxThreshold    bool    // true=使用上限模式，false=使用下限模式
-	enableFirstReset   bool    // 是否启用18:55重置
-	loop               *loopController
-	accountUpdater     accountUpdater
-	logAgg             *logAggregator
+	*BaseScheduler
+	apiClient *api.Client
 }
 
 // NewScheduler 创建新的调度器
@@ -52,62 +35,28 @@ func NewScheduler(apiClient *api.Client, storage *storage.Storage, timezone stri
 func NewSchedulerWithConfig(apiClient *api.Client, storage *storage.Storage, timezone string, thresholdMax, thresholdMin float64, useMax bool, enableFirstReset bool) (*Scheduler, error) {
 	// 使用配置的时区，如果未设置则使用默认时区
 	if timezone == "" {
-		timezone = BeijingTimezone
+		timezone = config.BeijingTimezone
 	}
 
-	// 加载时区
-	loc, err := time.LoadLocation(timezone)
+	base, err := newBaseScheduler(storage, timezone, thresholdMax, thresholdMin, useMax, enableFirstReset, "单账号调度器")
 	if err != nil {
-		return nil, fmt.Errorf("加载时区失败 (%s): %w", timezone, err)
+		return nil, err
 	}
 
 	return &Scheduler{
-		apiClient:          apiClient,
-		storage:            storage,
-		location:           loc,
-		creditThresholdMax: thresholdMax,
-		creditThresholdMin: thresholdMin,
-		useMaxThreshold:    useMax,
-		enableFirstReset:   enableFirstReset,
-		loop:               newLoopController(SubscriptionCheckInterval),
-		accountUpdater:     newAccountUpdater(storage),
-		logAgg:             newLogAggregator("单账号调度器", 5*time.Minute),
+		BaseScheduler: base,
+		apiClient:     apiClient,
 	}, nil
 }
 
 // Start 启动调度器
 func (s *Scheduler) Start() {
-	logger.Info("========================================")
-	logger.Info("调度器启动")
-	logger.Info("时区: %s", s.location.String())
-	if s.enableFirstReset {
-		logger.Info("第一次重置时间: %02d:%02d (已启用)", FirstResetHour, FirstResetMinute)
-	} else {
-		logger.Info("第一次重置时间: %02d:%02d (已禁用)", FirstResetHour, FirstResetMinute)
-	}
-	logger.Info("第二次重置时间: %02d:%02d", SecondResetHour, SecondResetMinute)
-
-	// 显示额度判断模式
-	if s.useMaxThreshold && s.creditThresholdMax > 0 {
-		logger.Info("额度判断模式: 上限模式 - 当额度 > %.1f%% 时跳过18点重置", s.creditThresholdMax)
-	} else if !s.useMaxThreshold && s.creditThresholdMin > 0 {
-		logger.Info("额度判断模式: 下限模式 - 当额度 < %.1f%% 时才执行18点重置", s.creditThresholdMin)
-	} else {
-		logger.Info("额度判断模式: 已禁用")
-	}
-
-	logger.Info("订阅状态检查间隔: %v", SubscriptionCheckInterval)
-	logger.Info("========================================")
+	s.BaseScheduler.Start(func() {
+		logger.Info("订阅状态检查间隔: %v", SubscriptionCheckInterval)
+	})
 	s.loop.run(s.checkSubscriptionStatus, s.checkAndExecute)
 	s.logAgg.Flush()
 	logger.Info("调度器已停止")
-}
-
-// Stop 停止调度器
-func (s *Scheduler) Stop() {
-	logger.Info("正在停止调度器...")
-	s.loop.Stop()
-	s.logAgg.Flush()
 }
 
 // checkSubscriptionStatus 检查并验证目标订阅状态
@@ -151,29 +100,9 @@ func (s *Scheduler) checkSubscriptionStatus() {
 
 // checkAndExecute 检查并执行重置任务
 func (s *Scheduler) checkAndExecute() {
-	now := time.Now().In(s.location)
-	currentHour := now.Hour()
-	currentMinute := now.Minute()
-
-	s.logAgg.Add("检查时间: %s", now.Format("2006-01-02 15:04:05"))
-
-	// 检查是否需要执行第一次重置（18:50）
-	if currentHour == FirstResetHour && currentMinute == FirstResetMinute {
-		if !s.enableFirstReset {
-			logger.Debug("18:55重置已禁用，跳过")
-			s.logAgg.Flush()
-			return
-		}
-		s.logAgg.Flush()
-		s.executeReset("first")
-		return
-	}
-
-	// 检查是否需要执行第二次重置（23:55）
-	if currentHour == SecondResetHour && currentMinute == SecondResetMinute {
-		s.logAgg.Flush()
-		s.executeReset("second")
-		return
+	shouldReset, resetType := s.checkTime()
+	if shouldReset {
+		s.executeReset(resetType)
 	}
 }
 
@@ -307,37 +236,4 @@ func (s *Scheduler) executeReset(resetType string) {
 // updateAccountInfo 更新账号信息
 func (s *Scheduler) updateAccountInfo(sub *models.Subscription) {
 	s.accountUpdater.UpdateGlobal(sub)
-}
-
-func (s *Scheduler) recordFailure(status *models.ExecutionStatus, message, resetType string) {
-	now := time.Now()
-	if resetType == "first" {
-		status.FirstResetToday = true
-		status.LastFirstResetTime = &now
-	} else {
-		status.SecondResetToday = true
-		status.LastSecondResetTime = &now
-	}
-	status.LastResetSuccess = false
-	status.LastResetMessage = message
-	status.ConsecutiveFailures++
-	if err := s.storage.SaveStatus(status); err != nil {
-		logger.Error("保存状态失败: %v", err)
-	}
-}
-
-func (s *Scheduler) recordSkip(status *models.ExecutionStatus, resetType string, reason string) {
-	now := time.Now()
-	if resetType == "first" {
-		status.FirstResetToday = true
-		status.LastFirstResetTime = &now
-	} else {
-		status.SecondResetToday = true
-		status.LastSecondResetTime = &now
-	}
-	status.LastResetSuccess = true
-	status.LastResetMessage = fmt.Sprintf("跳过: %s", reason)
-	if err := s.storage.SaveStatus(status); err != nil {
-		logger.Error("保存状态失败: %v", err)
-	}
 }

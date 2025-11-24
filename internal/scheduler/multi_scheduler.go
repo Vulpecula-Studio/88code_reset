@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"code88reset/internal/api"
+	"code88reset/internal/config"
 	"code88reset/internal/models"
 	"code88reset/internal/reset"
 	"code88reset/internal/storage"
@@ -14,18 +15,10 @@ import (
 
 // MultiScheduler 多账号调度器
 type MultiScheduler struct {
-	activeAccounts     []models.AccountConfig // 当前活跃的账号列表（从环境变量获取）
-	storage            *storage.Storage
-	baseURL            string
-	targetPlans        []string
-	location           *time.Location
-	creditThresholdMax float64 // 额度上限百分比（0-100），当额度>上限时跳过重置
-	creditThresholdMin float64 // 额度下限百分比（0-100），当额度<下限时才执行重置
-	useMaxThreshold    bool    // true=使用上限模式，false=使用下限模式
-	enableFirstReset   bool    // 是否启用18:55重置
-	loop               *loopController
-	accountUpdater     accountUpdater
-	logAgg             *logAggregator
+	*BaseScheduler
+	activeAccounts []models.AccountConfig // 当前活跃的账号列表（从环境变量获取）
+	baseURL        string
+	targetPlans    []string
 }
 
 // NewMultiSchedulerWithAccounts 创建新的多账号调度器（使用指定的账号列表）
@@ -35,58 +28,27 @@ func NewMultiSchedulerWithAccounts(storage *storage.Storage, baseURL string, act
 
 // NewMultiSchedulerWithConfig 创建带配置的多账号调度器
 func NewMultiSchedulerWithConfig(storage *storage.Storage, baseURL string, activeAccounts []models.AccountConfig, targetPlans []string, timezone string, thresholdMax, thresholdMin float64, useMax bool, enableFirstReset bool) (*MultiScheduler, error) {
-	// 使用配置的时区
-	if timezone == "" {
-		timezone = BeijingTimezone
-	}
-
-	// 加载时区
-	loc, err := time.LoadLocation(timezone)
+	base, err := newBaseScheduler(storage, timezone, thresholdMax, thresholdMin, useMax, enableFirstReset, "多账号调度器")
 	if err != nil {
-		return nil, fmt.Errorf("加载时区失败 (%s): %w", timezone, err)
+		return nil, err
 	}
-
-	updater := newAccountUpdater(storage)
+	if timezone == "" {
+		timezone = config.BeijingTimezone
+	}
 
 	return &MultiScheduler{
-		activeAccounts:     activeAccounts,
-		storage:            storage,
-		baseURL:            baseURL,
-		targetPlans:        targetPlans,
-		location:           loc,
-		creditThresholdMax: thresholdMax,
-		creditThresholdMin: thresholdMin,
-		useMaxThreshold:    useMax,
-		enableFirstReset:   enableFirstReset,
-		loop:               newLoopController(SubscriptionCheckInterval),
-		accountUpdater:     updater,
-		logAgg:             newLogAggregator("多账号调度器", 5*time.Minute),
+		BaseScheduler:  base,
+		activeAccounts: activeAccounts,
+		baseURL:        baseURL,
+		targetPlans:    targetPlans,
 	}, nil
 }
 
 // Start 启动多账号调度器
 func (s *MultiScheduler) Start() {
-	logger.Info("========================================")
-	logger.Info("多账号调度器启动")
-	logger.Info("时区: %s", s.location.String())
-	if s.enableFirstReset {
-		logger.Info("第一次重置时间: %02d:%02d (已启用)", FirstResetHour, FirstResetMinute)
-	} else {
-		logger.Info("第一次重置时间: %02d:%02d (已禁用)", FirstResetHour, FirstResetMinute)
-	}
-	logger.Info("第二次重置时间: %02d:%02d", SecondResetHour, SecondResetMinute)
-
-	// 显示额度判断模式
-	if s.useMaxThreshold && s.creditThresholdMax > 0 {
-		logger.Info("额度判断模式: 上限模式 - 当额度 > %.1f%% 时跳过18点重置", s.creditThresholdMax)
-	} else if !s.useMaxThreshold && s.creditThresholdMin > 0 {
-		logger.Info("额度判断模式: 下限模式 - 当额度 < %.1f%% 时才执行18点重置", s.creditThresholdMin)
-	} else {
-		logger.Info("额度判断模式: 已禁用")
-	}
-
-	logger.Info("活跃账号数量: %d", len(s.activeAccounts))
-	logger.Info("========================================")
+	s.BaseScheduler.Start(func() {
+		logger.Info("活跃账号数量: %d", len(s.activeAccounts))
+	})
 
 	if len(s.activeAccounts) == 0 {
 		logger.Warn("没有活跃的账号，调度器将空转")
@@ -96,13 +58,6 @@ func (s *MultiScheduler) Start() {
 	s.loop.run(s.checkAllAccountsStatus, s.checkAndExecute)
 	s.logAgg.Flush()
 	logger.Info("多账号调度器已停止")
-}
-
-// Stop 停止调度器
-func (s *MultiScheduler) Stop() {
-	logger.Info("正在停止多账号调度器...")
-	s.loop.Stop()
-	s.logAgg.Flush()
 }
 
 // checkAllAccountsStatus 检查所有活跃账号的订阅状态
@@ -166,29 +121,9 @@ func (s *MultiScheduler) updateAccountInfo(employeeEmail string, sub *models.Sub
 
 // checkAndExecute 检查并执行重置任务
 func (s *MultiScheduler) checkAndExecute() {
-	now := time.Now().In(s.location)
-	currentHour := now.Hour()
-	currentMinute := now.Minute()
-
-	s.logAgg.Add("检查时间: %s", now.Format("2006-01-02 15:04:05"))
-
-	// 检查是否需要执行第一次重置（18:50）
-	if currentHour == FirstResetHour && currentMinute == FirstResetMinute {
-		if !s.enableFirstReset {
-			logger.Debug("18:55重置已禁用，跳过")
-			s.logAgg.Flush()
-			return
-		}
-		s.logAgg.Flush()
-		s.executeResetForAllAccounts("first")
-		return
-	}
-
-	// 检查是否需要执行第二次重置（23:55）
-	if currentHour == SecondResetHour && currentMinute == SecondResetMinute {
-		s.logAgg.Flush()
-		s.executeResetForAllAccounts("second")
-		return
+	shouldReset, resetType := s.checkTime()
+	if shouldReset {
+		s.executeResetForAllAccounts(resetType)
 	}
 }
 
