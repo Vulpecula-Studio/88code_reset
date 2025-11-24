@@ -127,6 +127,18 @@ func (c *Client) GetSubscriptions() ([]models.Subscription, error) {
 		return nil, err
 	}
 
+	// 尝试解析为新格式 {code: 0, data: [...]}
+	var responseWrapper struct {
+		Code int                   `json:"code"`
+		Data []models.Subscription `json:"data"`
+	}
+
+	if err := json.Unmarshal(respBody, &responseWrapper); err == nil && responseWrapper.Data != nil {
+		logger.Info("订阅列表获取成功 (新格式)，共 %d 个订阅", len(responseWrapper.Data))
+		return responseWrapper.Data, nil
+	}
+
+	// 如果新格式解析失败，尝试回退到旧格式 [...]
 	var subscriptions []models.Subscription
 	if err := json.Unmarshal(respBody, &subscriptions); err != nil {
 		return nil, fmt.Errorf("解析订阅列表失败: %w", err)
