@@ -1,14 +1,26 @@
-version: '3.8'
-
 services:
   reset-scheduler:
-    build: .
+    build:
+      context: .
+      args:
+        HTTP_PROXY: http://host.docker.internal:9999
+        HTTPS_PROXY: http://host.docker.internal:9999
+        NO_PROXY: localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16,host.docker.internal
     container_name: 88code_reset_scheduler
     restart: unless-stopped
     environment:
-      # 方式1: 直接设置环境变量
-      - API_KEY=${API_KEY}
-      # 或者从 .env 文件自动加载
+      # 支持 API_KEYS 和 API_KEY 两种格式
+      - API_KEYS=${API_KEYS}
+      - API_KEY=${API_KEYS}
+      # 代理配置
+      - HTTP_PROXY=http://host.docker.internal:9999
+      - HTTPS_PROXY=http://host.docker.internal:9999
+      - NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16,host.docker.internal
+      # 其他配置
+      - TZ=${TIMEZONE:-Asia/Shanghai}
+      - CREDIT_THRESHOLD_MAX=${CREDIT_THRESHOLD_MAX:-83}
+      - ENABLE_FIRST_RESET=${ENABLE_FIRST_RESET:-false}
+      - PLANS=${PLANS}
     env_file:
       - .env
     volumes:
@@ -22,13 +34,31 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # 可选：用于测试的临时容器
   reset-test:
-    build: .
+    build:
+      context: .
+      args:
+        HTTP_PROXY: http://host.docker.internal:9999
+        HTTPS_PROXY: http://host.docker.internal:9999
+        NO_PROXY: localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16,host.docker.internal
     container_name: 88code_reset_test
     environment:
-      - API_KEY=${API_KEY}
+      # 支持 API_KEYS 和 API_KEY 两种格式
+      - API_KEYS=${API_KEYS}
+      - API_KEY=${API_KEYS}
+      # 代理配置
+      - HTTP_PROXY=http://host.docker.internal:9999
+      - HTTPS_PROXY=http://host.docker.internal:9999
+      - NO_PROXY=localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16,host.docker.internal
+      # 其他配置
+      - TZ=${TIMEZONE:-Asia/Shanghai}
+      - CREDIT_THRESHOLD_MAX=${CREDIT_THRESHOLD_MAX:-83}
+      - ENABLE_FIRST_RESET=${ENABLE_FIRST_RESET:-false}
+      - PLANS=${PLANS}
     env_file:
       - .env
     volumes:
@@ -37,3 +67,5 @@ services:
     command: ["-mode=test", "-datadir=/app/data", "-logdir=/app/logs"]
     profiles:
       - test
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

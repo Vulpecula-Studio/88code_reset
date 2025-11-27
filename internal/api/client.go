@@ -24,6 +24,17 @@ type Client struct {
 	} // 存储接口，用于保存响应
 }
 
+// subscriptionAPIResponse 描述 /api/subscription 接口的标准响应结构
+// 实际返回为带外层包装的对象，订阅列表位于 data 字段中
+type subscriptionAPIResponse struct {
+	Code     int                  `json:"code"`
+	Level    interface{}          `json:"level"`
+	Msg      string               `json:"msg"`
+	OK       bool                 `json:"ok"`
+	Data     []models.Subscription `json:"data"`
+	DataType int                  `json:"dataType"`
+}
+
 // NewClient 创建新的 API 客户端
 func NewClient(baseURL, apiKey string, targetPlans []string) *Client {
 	return &Client{
@@ -127,13 +138,22 @@ func (c *Client) GetSubscriptions() ([]models.Subscription, error) {
 		return nil, err
 	}
 
-	var subscriptions []models.Subscription
-	if err := json.Unmarshal(respBody, &subscriptions); err != nil {
+	var apiResp subscriptionAPIResponse
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
 		return nil, fmt.Errorf("解析订阅列表失败: %w", err)
 	}
 
-	logger.Info("订阅列表获取成功，共 %d 个订阅", len(subscriptions))
-	return subscriptions, nil
+	if !apiResp.OK || apiResp.Code != 0 {
+		// 兼容服务端业务错误返回：保持与 makeRequest 相似的错误格式
+		return nil, fmt.Errorf("API错误 [%d]: %s", apiResp.Code, apiResp.Msg)
+	}
+
+	if apiResp.Data == nil {
+		return nil, fmt.Errorf("解析订阅列表失败: 响应中缺少 data 字段")
+	}
+
+	logger.Info("订阅列表获取成功，共 %d 个订阅", len(apiResp.Data))
+	return apiResp.Data, nil
 }
 
 // GetTargetSubscription 获取目标订阅信息（根据配置的计划名称）
